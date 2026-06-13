@@ -49,15 +49,15 @@ jobs:
 
       - name: Create Git Tag for Release Tracking
         run: |
-          # 1. Explicitly move into the checked-out workspace
-          cd "$GITHUB_WORKSPACE"
+          # 1. Force Git to trust any path inside the container environment
+          git config --system --add safe.directory '*'
           
-          # 2. Tell Git to trust this directory globally
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # 2. Configure the automated profile
+          git config --system user.name "github-actions[bot]"
+          git config --system user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # 3. Configure the bot profile
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@://github.com"
+          # 3. Explicitly verify Git can see the tree structure now
+          git status
           
           # 4. Generate and push the tag
           git tag -a "v${{ env.GENERATED_VERSION }}" -m "Automated build for version ${{ env.GENERATED_VERSION }}"
