@@ -3,13 +3,18 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
-    
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     # Run all steps natively inside the Arch Linux container
     container:
       image: archlinux:latest
+    outputs:
+      generated_version: ${{ steps.version.outputs.generated_version }}
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
@@ -24,49 +29,73 @@ jobs:
         run: |
           pacman -S --needed --noconfirm base-devel sudo git
 
-      - name: Generate Dynamic Version and Inject into PKGBUILD
-        run: |
-          # 1. Generate date string format: YYYYMMDD
-          PKG_DATE=$(date +'%Y%m%d')
-          echo "GENERATED_VERSION=$PKG_DATE" >> $GITHUB_ENV
-          
-          # 2. Dynamically replace pkgver inside your PKGBUILD file
-          sed -i "s/^pkgver=.*/pkgver=$PKG_DATE/" PKGBUILD
-          
-          # 3. Regenerate .SRCINFO to match the new version
-          sudo -u builder makepkg --printsrcinfo > .SRCINFO || true
-
       - name: Configure Non-Root Builder User
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           chown -R builder:builder "$GITHUB_WORKSPACE"
 
+      - name: Generate Dynamic Version and Inject into PKGBUILD
+        id: version
+        run: |
+          # 1. Generate date string format: YYYYMMDD
+          PKG_DATE=$(date +'%Y%m%d')
+          echo "GENERATED_VERSION=$PKG_DATE" >> "$GITHUB_ENV"
+          echo "generated_version=$PKG_DATE" >> "$GITHUB_OUTPUT"
+
+          # 2. Dynamically replace pkgver inside your PKGBUILD file
+          sed -i "s/^pkgver=.*/pkgver=$PKG_DATE/" PKGBUILD
+
+          # 3. Regenerate .SRCINFO to match the new version
+          sudo -u builder makepkg --printsrcinfo > .SRCINFO
+
       - name: Compile Package via makepkg
         run: |
           # makepkg cannot run as root, execute it as the 'builder' user
           sudo -u builder makepkg --syncdeps --noconfirm --log --holdver
 
+      - name: Upload Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: featherlinux-keyring-package
+          path: "*.pkg.tar.zst"
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
       - name: Create Git Tag for Release Tracking
+        env:
+          GENERATED_VERSION: ${{ needs.build.outputs.generated_version }}
         run: |
-          # 1. Force Git to trust any path inside the container environment
-          git config --system --add safe.directory '*'
-          
-          # 2. Configure the automated profile
-          git config --system user.name "github-actions[bot]"
-          git config --system user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          # 3. Explicitly verify Git can see the tree structure now
+          # 1. Configure the automated profile
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 2. Explicitly verify Git can see the tree structure now
           git status
-          
-          # 4. Generate and push the tag
-          git tag -a "v${{ env.GENERATED_VERSION }}" -m "Automated build for version ${{ env.GENERATED_VERSION }}"
-          git push origin "v${{ env.GENERATED_VERSION }}"
+
+          # 3. Generate and push the tag if it does not already exist
+          if git ls-remote --exit-code --tags origin "refs/tags/v${GENERATED_VERSION}"; then
+            echo "Tag v${GENERATED_VERSION} already exists; using it for the release."
+          else
+            git tag -a "v${GENERATED_VERSION}" -m "Automated build for version ${GENERATED_VERSION}"
+            git push origin "v${GENERATED_VERSION}"
+          fi
+
+      - name: Download Package Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: featherlinux-keyring-package
 
       - name: Upload Raw Package to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ env.GENERATED_VERSION }}"
+          tag_name: "v${{ needs.build.outputs.generated_version }}"
           files: |
             *.pkg.tar.zst
         env:
