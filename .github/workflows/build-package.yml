@@ -49,12 +49,17 @@ jobs:
 
       - name: Create Git Tag for Release Tracking
         run: |
-          # Safe directory configuration required by newer Git versions
+          # 1. Explicitly move into the checked-out workspace
+          cd "$GITHUB_WORKSPACE"
+          
+          # 2. Tell Git to trust this directory globally
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           
-          # Create and push a unique tag matching your custom version structure
+          # 3. Configure the bot profile
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@://github.com"
+          
+          # 4. Generate and push the tag
           git tag -a "v${{ env.GENERATED_VERSION }}" -m "Automated build for version ${{ env.GENERATED_VERSION }}"
           git push origin "v${{ env.GENERATED_VERSION }}"
 
