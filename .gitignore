@@ -1,6 +1,8 @@
 *~
 *.tar.gz
 *.tar.gz.sig
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
 .codex
 .agents
 .gpg

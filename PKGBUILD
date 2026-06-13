@@ -13,10 +13,10 @@ source=('Makefile'
         'featherlinux.gpg'
         'featherlinux-revoked'
         'featherlinux-trusted')
-sha256sums=('b00e0304982253e15dc9ee076bd1c795585f1a1028112658a5d2c9f773c4d187'
-            '5a10d8dc7b605d23b8c888aff8759b6e1134ffc8ef0730ea99c9ce1286a44a62'
-            'af2081cc55ba21ec22226660fc8079f190ea7442008fe45d5de682860721972b'
-            '279d15cdc4d66d8b6efe12c7a4945b8dfd235e635f97f102cd4a70afdb265eb3')
+sha256sums=('51847637e9a8f87c9387a4661a43d35cfe7d8fb414a448a7cebaa8b2ce39a0e3'
+            'ecdf58d59ef4433d5c7e1b39e836a664b2d048a37de09a55604203e0eeee193a'
+            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+            'e86a41172d0edf93dbe3742e25e9836204c7c576e034ca2b16a6b93e679e4d8e')
 
 pkgver() {
   date +%Y%m%d
