@@ -1,10 +1,9 @@
-name: Build FeatherLinux Keyring Package
+name: Build and Release FeatherLinux Keyring Package
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-
+    branches: [ main ]
+  workflow_dispatch:
+    
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,6 +24,18 @@ jobs:
         run: |
           pacman -S --needed --noconfirm base-devel sudo git
 
+      - name: Generate Dynamic Version and Inject into PKGBUILD
+        run: |
+          # 1. Generate date string format: YYYYMMDD
+          PKG_DATE=$(date +'%Y%m%d')
+          echo "GENERATED_VERSION=$PKG_DATE" >> $GITHUB_ENV
+          
+          # 2. Dynamically replace pkgver inside your PKGBUILD file
+          sed -i "s/^pkgver=.*/pkgver=$PKG_DATE/" PKGBUILD
+          
+          # 3. Regenerate .SRCINFO to match the new version
+          sudo -u builder makepkg --printsrcinfo > .SRCINFO || true
+
       - name: Configure Non-Root Builder User
         run: |
           useradd -m builder
@@ -36,11 +47,22 @@ jobs:
           # makepkg cannot run as root, execute it as the 'builder' user
           sudo -u builder makepkg --syncdeps --noconfirm --log --holdver
 
-      - name: Upload Compiled Package Artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Git Tag for Release Tracking
+        run: |
+          # Safe directory configuration required by newer Git versions
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          
+          # Create and push a unique tag matching your custom version structure
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ env.GENERATED_VERSION }}" -m "Automated build for version ${{ env.GENERATED_VERSION }}"
+          git push origin "v${{ env.GENERATED_VERSION }}"
+
+      - name: Upload Raw Package to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: arch-packages
-          path: |
-            *.tar.gz
+          tag_name: "v${{ env.GENERATED_VERSION }}"
+          files: |
             *.pkg.tar.zst
-            .SRCINFO
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
