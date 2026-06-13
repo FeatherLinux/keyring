@@ -1,0 +1,6 @@
+*~
+*.tar.gz
+*.tar.gz.sig
+.codex
+.agents
+.gpg

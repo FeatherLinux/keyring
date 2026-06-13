@@ -1,2 +1,2 @@
-# keyring
-FeatherLinux developer's gpg key, used for FeatherLinux repos
+# FeatherLinux Keyring
+Keyring for signing FeatherLinux packages

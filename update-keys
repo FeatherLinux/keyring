@@ -1,0 +1,145 @@
+#!/bin/bash
+
+set -euo pipefail
+# Let empty export directories expand to nothing instead of literal "*.asc".
+shopt -s nullglob
+
+export LANG=C
+
+# Build the keyring in an isolated GPG home so the user's personal keyring is never modified.
+TMPDIR=$(mktemp -d)
+trap "rm -rf '${TMPDIR}'" EXIT
+
+FILE_PREFIX="featherlinux"
+KEY_DESCRIPTION="FeatherLinux Packaging Team"
+KEY_EMAIL="packages@featherlinux.com"
+
+KEYSERVER='hkps://keyserver.ubuntu.com'
+
+# Keep GPG options in an array so quoting stays correct for every invocation.
+GPG=(gpg --quiet --batch --no-tty --no-permission-warning --keyserver "${KEYSERVER}" --homedir "${TMPDIR}")
+KEYID_FILES=(master-keyids master-revoked-keyids packager-keyids packager-revoked-keyids)
+
+pushd "$(dirname "$0")" >/dev/null
+
+# Generate a temporary local signing key used to locally sign trusted master keys.
+"${GPG[@]}" --gen-key <<EOF
+%echo Generating ${KEY_DESCRIPTION} Keyring keychain master key...
+Key-Type: EDDSA
+Key-Curve: Ed25519
+Key-Usage: sign
+Name-Real: ${KEY_DESCRIPTION} Keyring Keychain Master Key
+Name-Email: ${KEY_EMAIL}
+Expire-Date: 0
+%no-protection
+%commit
+%echo Done
+EOF
+
+rm -rf master{,-revoked} packager{,-revoked} ${FILE_PREFIX}-{trusted,revoked}
+mkdir master packager master-revoked packager-revoked
+
+# These files are required by pacman-key even when no keys land in them.
+if [[ ! -f ${FILE_PREFIX}-revoked ]] ; then
+    touch ${FILE_PREFIX}-revoked
+fi
+
+if [[ ! -f ${FILE_PREFIX}-trusted ]] ; then
+    touch ${FILE_PREFIX}-trusted
+fi
+
+# Fetch every listed key before doing trust checks or exports.
+for keyid_file in "${KEYID_FILES[@]}"; do
+	[[ -f "${keyid_file}" ]] || continue
+	while read -ra data || ((${#data[@]})); do
+		((${#data[@]})) || continue
+		keyid="${data[0]}"
+		[[ -z "${keyid}" || "${keyid}" == \#* ]] && continue
+		# Refresh keys already in the temporary keyring, otherwise receive them from the keyserver.
+		if "${GPG[@]}" --list-keys "${keyid}" &>/dev/null; then
+			"${GPG[@]}" --refresh-keys "${keyid}" &>/dev/null
+		else
+			"${GPG[@]}" --recv-keys "${keyid}" &>/dev/null
+		fi
+	done < "${keyid_file}"
+done
+
+
+# Master keys are locally signed and then assigned full ownertrust.
+while read -ra data || ((${#data[@]})); do
+	((${#data[@]})) || continue
+	keyid="${data[0]}"
+	username="${data[*]:1}"
+	[[ -z "${keyid}" || "${keyid}" == \#* ]] && continue
+	# Minimize strips extra signatures before exporting a compact key.
+	printf 'minimize\nquit\ny\n' | \
+		"${GPG[@]}" --command-fd 0 --edit-key "${keyid}"
+	# A local signature from the temporary keychain key makes the master key trusted here.
+	"${GPG[@]}" --yes --lsign-key "${keyid}" &>/dev/null
+	"${GPG[@]}" --armor --no-emit-version --export "${keyid}" >> "master/${username}.asc"
+	echo "${keyid}:4:" >> ${FILE_PREFIX}-trusted
+done < master-keyids
+# Import ownertrust after writing all master trust entries.
+"${GPG[@]}" --import-ownertrust < ${FILE_PREFIX}-trusted 2>/dev/null
+
+# packager-keyids
+while read -ra data || ((${#data[@]})); do
+	((${#data[@]})) || continue
+	keyid="${data[0]}"
+	username="${data[*]:1}"
+	[[ -z "${keyid}" || "${keyid}" == \#* ]] && continue
+	# Clean removes unusable signatures before checking whether the trust path is valid.
+	printf 'clean\nquit\ny\n' | \
+		"${GPG[@]}" --command-fd 0 --edit-key "${keyid}"
+	# Only fully trusted packager keys are included in the active keyring exports.
+	if ! "${GPG[@]}" --list-keys --with-colons "${keyid}" 2>/dev/null | grep -q '^pub:f:'; then
+		echo "key is not fully trusted: ${keyid} ${username}"
+	else
+		"${GPG[@]}" --armor --no-emit-version --export "${keyid}" >> "packager/${username}.asc"
+	fi
+done < packager-keyids
+
+# packager-revoked-keyids
+while read -ra data || ((${#data[@]})); do
+	((${#data[@]})) || continue
+	keyid="${data[0]}"
+	username="${data[*]:1}"
+	[[ -z "${keyid}" || "${keyid}" == \#* ]] && continue
+	printf 'clean\nquit\ny\n' | \
+		"${GPG[@]}" --command-fd 0 --edit-key "${keyid}"
+	# Revoked keys should no longer have a fully trusted path; export and record them when revoked.
+	if ! "${GPG[@]}" --list-keys --with-colons "${keyid}" 2>/dev/null | grep -q '^pub:f:'; then
+		"${GPG[@]}" --armor --no-emit-version --export "${keyid}" >> "packager-revoked/${username}.asc"
+		echo "${keyid}" >> ${FILE_PREFIX}-revoked
+	else
+		echo "key is still fully trusted: ${keyid} ${username}"
+	fi
+done < packager-revoked-keyids
+
+# master-revoked-keyids
+while read -ra data || ((${#data[@]})); do
+	((${#data[@]})) || continue
+	keyid="${data[0]}"
+	username="${data[*]:1}"
+	[[ -z "${keyid}" || "${keyid}" == \#* ]] && continue
+	printf 'clean\nquit\ny\n' | \
+		"${GPG[@]}" --command-fd 0 --edit-key "${keyid}"
+	# Revoked master keys are exported separately but recorded in the same revoked list.
+	if ! "${GPG[@]}" --list-keys --with-colons "${keyid}" 2>/dev/null | grep -q '^pub:f:'; then
+		"${GPG[@]}" --armor --no-emit-version --export "${keyid}" >> "master-revoked/${username}.asc"
+		echo "${keyid}" >> ${FILE_PREFIX}-revoked
+	else
+		echo "key is still fully trusted: ${keyid} ${username}"
+	fi
+done < master-revoked-keyids
+
+# Rebuild the combined keyring from whatever export files were produced.
+: > "${FILE_PREFIX}.gpg"
+key_exports=(master/*.asc master-revoked/*.asc packager/*.asc packager-revoked/*.asc)
+if ((${#key_exports[@]})); then
+	cat "${key_exports[@]}" >> "${FILE_PREFIX}.gpg"
+fi
+echo "Keyring created"
+
+
+popd >/dev/null
